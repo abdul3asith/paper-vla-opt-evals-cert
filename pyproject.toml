@@ -19,3 +19,10 @@ packages = ["benchmarks"]
 
 [tool.uv.sources]
 lerobot = { git = "https://github.com/huggingface/lerobot.git", rev = "b00571809f7cab69abeee19744d8dd3c18977aa2" }
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pre-commit>=4.7.0",
+    "ruff>=0.17.6",
+]

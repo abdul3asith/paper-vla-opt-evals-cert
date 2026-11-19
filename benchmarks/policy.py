@@ -6,6 +6,7 @@ from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import make_pre_post_processors
 
 from .models import ModelSpec
+from .techniques import Technique, cast_weights
 
 
 def pick_device() -> str:
@@ -13,33 +14,41 @@ def pick_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def load_policy(spec: ModelSpec, device: str | None = None) -> dict:
-    """Load the model, its settings and its input/output processors."""
+def load_policy(
+    spec: ModelSpec, technique: Technique, device: str | None = None
+) -> dict:
     device = device or pick_device()
 
-    # 1. Find the policy class from its text name.
     module = importlib.import_module(spec.policy_module)
     policy_cls = getattr(module, spec.policy_class)
 
-    # 2. Load the settings, then apply our overrides.
     config = PreTrainedConfig.from_pretrained(spec.policy_path)
-    config.device = device  # NEW: don't let it default to cuda or mps
+    config.device = device
+    config.compile_model = (
+        technique.compile_model
+    )  # NEW: π0.5's checkpoint says True; force our choice
     if spec.n_action_steps is not None:
         config.n_action_steps = spec.n_action_steps
 
-    # 3. Load the trained weights and move them to the device.
     policy = policy_cls.from_pretrained(spec.policy_path, config=config)
     policy.to(device)
+    if technique.cast_dtype is not None:  # NEW
+        cast_weights(policy, technique.cast_dtype)
     policy.eval()
 
-    # 4. Load the processors that normalize inputs and un-normalize outputs.
     pre, post = make_pre_post_processors(
         policy.config,
         pretrained_path=spec.policy_path,
         preprocessor_overrides={"device_processor": {"device": device}},
     )
-
-    return {"policy": policy, "pre": pre, "post": post, "spec": spec, "device": device}
+    return {
+        "policy": policy,
+        "pre": pre,
+        "post": post,
+        "spec": spec,
+        "technique": technique,
+        "device": device,
+    }
 
 
 def make_observation(bundle: dict) -> dict:
