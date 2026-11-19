@@ -6,7 +6,13 @@ from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.factory import make_pre_post_processors
 
 from .models import ModelSpec
-from .techniques import Technique, cast_weights
+from .techniques import (
+    Technique,
+    autocast_context,
+    cast_weights,
+    check_compile,
+    quantize,
+)
 
 
 def pick_device() -> str:
@@ -24,16 +30,18 @@ def load_policy(
 
     config = PreTrainedConfig.from_pretrained(spec.policy_path)
     config.device = device
-    config.compile_model = (
-        technique.compile_model
-    )  # NEW: π0.5's checkpoint says True; force our choice
+    config.compile_model = technique.compile_model
+    if technique.compile_model:
+        config.compile_mode = technique.compile_mode
     if spec.n_action_steps is not None:
         config.n_action_steps = spec.n_action_steps
 
     policy = policy_cls.from_pretrained(spec.policy_path, config=config)
+    check_compile(policy, technique)
     policy.to(device)
-    if technique.cast_dtype is not None:  # NEW
+    if technique.cast_dtype is not None:
         cast_weights(policy, technique.cast_dtype)
+    quantize(policy, technique)
     policy.eval()
 
     pre, post = make_pre_post_processors(
@@ -65,9 +73,8 @@ def make_observation(bundle: dict) -> dict:
 
 
 def act(bundle: dict, obs: dict) -> torch.Tensor:
-    """One full step: preprocess -> model -> postprocess."""
-    with torch.no_grad():
-        bundle["policy"].reset()  # empty the action queue, so this is a real model run
+    with torch.no_grad(), autocast_context(bundle["technique"], bundle["device"]):
+        bundle["policy"].reset()
         batch = bundle["pre"](obs)
         action = bundle["policy"].select_action(batch)
         return bundle["post"](action)
